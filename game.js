@@ -25,6 +25,7 @@ const NAME_LEN = 3;
 
 const ROUND_MS = 70000;
 const SUDDEN_MS = 30000;
+const IDLE_MS = 45000;
 
 // --- Court geometry -------------------------------------------------------
 
@@ -128,7 +129,7 @@ const CABINET_KEYS = {
   START2: ['2'],
 };
 
-const KEY_TO_ARCADE = {};
+const KEY_TO_ARCADE = Object.create(null);
 for (const [code, keys] of Object.entries(CABINET_KEYS)) {
   for (const key of keys) {
     KEY_TO_ARCADE[normalizeKey(key)] = code;
@@ -171,6 +172,17 @@ function onKeyUp(e) {
 
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
+
+// If the frame loses focus mid-press the matching keyup never arrives, which would
+// pin a player in a charge forever. On a cabinet nobody can reach, that is fatal.
+function releaseAllKeys() {
+  for (const key in held) held[key] = false;
+}
+
+window.addEventListener('blur', releaseAllKeys);
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) releaseAllKeys();
+});
 
 // Consume a rising edge. Returns true once per physical press.
 function pressed(code) {
@@ -280,6 +292,32 @@ function update(time, delta) {
   const dt = Math.min(delta, 50);
   const phase = scene.st.phase;
 
+  // Idle watchdog. Nobody can reach this cabinet for three days, so no screen is
+  // allowed to hold the machine indefinitely. A player who opens the name grid,
+  // does not understand it and walks away would otherwise park the cabinet on a
+  // static card forever — and the first several games all reach that grid.
+  // Match phases are exempt: they drain themselves on the round clock.
+  if (phase === 'playing' || phase === 'sudden' || phase === 'countdown' || phase === 'attract') {
+    scene.st.idleT = 0;
+  } else {
+    scene.st.idleT = anyCabinetHeld() ? 0 : (scene.st.idleT || 0) + dt;
+    if (scene.st.idleT > IDLE_MS) {
+      scene.st.idleT = 0;
+      if (phase === 'name') {
+        // saveEntry defaults the name and returns to attract on its own.
+        saveEntry(scene);
+      } else {
+        scene.pauseCard.setVisible(false);
+        scene.resultCard.setVisible(false);
+        scene.controlsCard.setVisible(false);
+        scene.boardCard.setVisible(false);
+        abandonMatch(scene);
+      }
+      clearEdges();
+      return;
+    }
+  }
+
   // The match simulation keeps running behind the attract/menu overlays.
   if (phase === 'attract' || phase === 'controls' || phase === 'board') {
     stepMatch(scene, dt, time, true);
@@ -287,11 +325,12 @@ function update(time, delta) {
     stepMatch(scene, dt, time, false);
   } else if (phase === 'countdown') {
     stepCountdown(scene, dt, time);
-  } else {
-    // Result, name entry and pause: tejos already in the air still land, but the
-    // aiming overlay has no owner on screen.
+  } else if (phase !== 'paused') {
+    // Result and name entry: tejos already in the air still land, but the aiming
+    // overlay has no owner on screen. Pause freezes everything, including flight —
+    // otherwise a tejo detonates and scores behind the PAUSA card.
     stepTejos(scene, dt, time);
-    if (phase !== 'paused') scene.aimLayer.clear();
+    scene.aimLayer.clear();
   }
 
   if (phase === 'attract') handleMenu(scene, time, dt);
@@ -1127,7 +1166,7 @@ function releaseThrow(scene, m, p, time, burned) {
   spawnTejo(scene, m, p, tx, ty, time, perfect, burned);
   animateThrow(scene, p.key);
   sfx(scene, burned ? 'burn' : 'throw');
-  if (perfect && !burned) popText(scene, '¡PERFECTO!', p.color, 22, 150);
+  if (perfect && !burned) popText(scene, '¡PERFECTO!', p.color, 22, 460);
 }
 
 function spawnTejo(scene, m, p, tx, ty, time, perfect, burned) {
@@ -1250,6 +1289,15 @@ function landTejo(scene, m, tj, time) {
       shake(scene, 240, 0.009);
     }
   }
+}
+
+// Drop every tejo still in the air without resolving it.
+function flushTejos(m) {
+  for (const tj of m.tejos) {
+    tj.shadow.destroy();
+    tj.disc.destroy();
+  }
+  m.tejos.length = 0;
 }
 
 function comboMult(combo) {
@@ -1436,7 +1484,7 @@ function handleMatchInput(scene, time) {
     const p = m[key];
     if (p.cpu) continue;
     const btns = THROW_BTNS[key];
-    if (!p.charging && pressedAny(btns) && p.cooldown <= 0) {
+    if (!p.charging && p.cooldown <= 0 && pressedAny(btns)) {
       beginCharge(scene, p);
     } else if (p.charging && !heldAny(btns)) {
       releaseThrow(scene, m, p, time, false);
@@ -1518,6 +1566,7 @@ function finishRound(scene, time) {
   if (m.p1.score === m.p2.score && !m.sudden) {
     m.sudden = true;
     m.timeLeft = SUDDEN_MS;
+    flushTejos(m);
     scene.st.phase = 'sudden';
     popText(scene, 'MUERTE SUBITA', COL.red, 44, 1500, 268);
     scene.hud.mode.setText('MUERTE SUBITA — EL PRIMER PUNTO GANA');
@@ -1526,6 +1575,11 @@ function finishRound(scene, time) {
   }
 
   m.over = true;
+  // Clear the sky before snapshotting the scoreboard. A tejo still in flight
+  // would land during the result screen and keep incrementing the live score, so
+  // the HUD and the result card would disagree — and in sudden death a throw that
+  // left the hand first but lands second could crown the wrong player.
+  flushTejos(m);
   stopMusic(scene);
   scene.st.phase = 'result';
   scene.st.resultUntil = time + 4200;
@@ -1837,7 +1891,7 @@ function popText(scene, text, color, size, life, y) {
     targets: t,
     alpha: 0,
     y: top - 26,
-    delay: life - 200,
+    delay: Math.max(0, life - 200),
     duration: 200,
   });
 }
@@ -2027,15 +2081,22 @@ function initAudio(scene) {
   }
 }
 
+// A suspended AudioContext does not advance currentTime, so anything scheduled
+// against it is stopped at a moment that never arrives — the node is never
+// released. The attract duel fires several sounds a second forever, so returning
+// a non-running context here leaks oscillators until the tab dies overnight.
+// resume() is async: ask for it, but refuse to schedule until it has landed.
 function actx(scene) {
   const a = scene.audio;
   if (!a || !a.ready || !a.ctx) return null;
-  if (a.ctx.state === 'suspended') {
+  if (a.ctx.state !== 'running') {
     try {
-      a.ctx.resume();
+      const p = a.ctx.resume();
+      if (p && p.catch) p.catch(function () {});
     } catch (err) {
       return null;
     }
+    return null;
   }
   return a.ctx;
 }
