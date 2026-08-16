@@ -112,7 +112,10 @@ const COL = {
   mechaFold: 0xffd9e6,
   ash: 0x5a4a3c,
   scorch: 0x24242e,
+  plate: 0x6e6a63,
+  plateLit: 0xa39c92,
   crate: 0xb8342c,
+  crateAlt: 0xd8a416,
   crateDark: 0x7d221d,
 };
 
@@ -474,7 +477,8 @@ function crateStack(scene, x, y, cols, rows, sc) {
     for (let c = 0; c < cols; c++) {
       const bx = x + c * cw;
       const by = y - r * ch;
-      g.fillStyle(r % 2 ? COL.crate : COL.crateDark, 1);
+      const tone = (r + c) % 3 === 1 ? COL.crateAlt : (r % 2 ? COL.crate : COL.crateDark);
+      g.fillStyle(tone, 1);
       g.fillRect(bx, by, cw - 3, ch - 3);
       // Moulded rim and the dark cell grid that makes a crate read as a crate.
       g.lineStyle(2 * sc, 0x000000, 0.5);
@@ -697,6 +701,7 @@ function buildCourt(scene) {
 
   buildNeighbourLanes(scene);
   buildTablero(scene);
+  buildArmour(scene);
   buildCajon(scene);
   buildLane(scene);
 }
@@ -729,8 +734,8 @@ function buildTablero(scene) {
   const g = scene.add.graphics();
   g.setDepth(1);
   const cx = 400;
-  const cy = 188;
-  const R = 118;
+  const cy = 196;
+  const R = 182;
 
   g.fillStyle(0x000000, 0.4);
   g.fillCircle(cx + 5, cy + 6, R);
@@ -756,12 +761,12 @@ function buildTablero(scene) {
 
   // Plank seams and the pocking left by every tejo that missed the box.
   g.lineStyle(1, 0x000000, 0.28);
-  for (let k = -2; k <= 2; k++) {
-    const yy = cy + k * 34;
+  for (let k = -3; k <= 3; k++) {
+    const yy = cy + k * 42;
     const dx = Math.sqrt(Math.max(0, R * R - (yy - cy) * (yy - cy)));
     g.lineBetween(cx - dx, yy, cx + dx, yy);
   }
-  for (let i2 = 0; i2 < 40; i2++) {
+  for (let i2 = 0; i2 < 54; i2++) {
     const a = pseudo(i2 * 3.7) * Math.PI * 2;
     const r = Math.sqrt(pseudo(i2 * 6.1)) * (R - 8);
     const px = cx + Math.cos(a) * r;
@@ -769,6 +774,58 @@ function buildTablero(scene) {
     if (py > CLAY.topY) continue;
     g.fillStyle(0x000000, 0.42);
     g.fillCircle(px, py, 2 + pseudo(i2 * 1.9) * 5);
+  }
+}
+
+// Steel armour plate. Bolted across the tablero at the clay's angle, it eats the
+// tejos that overshoot the box — hence the dense pitting. Photographed on real
+// courts as a battered grey sheet, occasionally stacked tyre treads instead.
+function buildArmour(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(1);
+  const tw = CLAY.topW / 2 - 14;
+  const yTop = CLAY.topY - 62;
+  const yBot = CLAY.topY + 4;
+
+  g.fillStyle(0x000000, 0.45);
+  g.fillPoints([
+    { x: CLAY.cx - tw - 14, y: yTop + 7 }, { x: CLAY.cx + tw + 14, y: yTop + 7 },
+    { x: CLAY.cx + tw + 20, y: yBot + 7 }, { x: CLAY.cx - tw - 20, y: yBot + 7 },
+  ], true);
+  g.fillStyle(COL.plate, 1);
+  g.fillPoints([
+    { x: CLAY.cx - tw - 14, y: yTop }, { x: CLAY.cx + tw + 14, y: yTop },
+    { x: CLAY.cx + tw + 20, y: yBot }, { x: CLAY.cx - tw - 20, y: yBot },
+  ], true);
+  // Rolled sheen down the plate.
+  g.fillStyle(COL.plateLit, 0.16);
+  g.fillPoints([
+    { x: CLAY.cx - tw - 14, y: yTop }, { x: CLAY.cx + tw + 14, y: yTop },
+    { x: CLAY.cx + tw + 16, y: yTop + 22 }, { x: CLAY.cx - tw - 15, y: yTop + 22 },
+  ], true);
+  // Impact pitting, densest toward the middle where most overshoots land.
+  for (let i = 0; i < 90; i++) {
+    const t = pseudo(i * 3.1);
+    const y = yTop + 6 + pseudo(i * 6.7) * (yBot - yTop - 12);
+    const spread = 1 - Math.abs(t - 0.5) * 0.9;
+    const x = CLAY.cx + (t * 2 - 1) * (tw + 10);
+    const r = 1.5 + pseudo(i * 2.7) * 4.5 * spread;
+    g.fillStyle(0x000000, 0.4);
+    g.fillEllipse(x, y, r * 2, r * 1.5);
+    g.fillStyle(COL.plateLit, 0.22);
+    g.fillEllipse(x - r * 0.3, y - r * 0.4, r * 1.2, r * 0.8);
+  }
+  // Powder scorch fanning up the plate from the bocín.
+  for (let i = 0; i < 4; i++) {
+    g.fillStyle(0x1a1712, 0.09);
+    g.fillEllipse(CLAY.cx, yBot - 6, 150 + i * 70, 60 + i * 26);
+  }
+  // Bolt heads along the top rail.
+  for (let i = -3; i <= 3; i++) {
+    g.fillStyle(0x8a6a3a, 0.9);
+    g.fillCircle(CLAY.cx + i * 62, yTop + 8, 4);
+    g.fillStyle(0x000000, 0.35);
+    g.fillCircle(CLAY.cx + i * 62, yTop + 9, 2);
   }
 }
 
@@ -1004,7 +1061,9 @@ function buildPlayfieldFx(scene) {
 
 function buildHud(scene) {
   scene.hud = {};
-  scene.add.rectangle(W / 2, 40, W, 80, 0x000000, 0.55).setDepth(9);
+  // Opaque: the tablero now stands tall enough to reach the HUD, and the scores
+  // must stay the most legible thing on screen from across a room.
+  scene.add.rectangle(W / 2, 40, W, 80, 0x05060a, 1).setDepth(9);
   scene.add.rectangle(W / 2, 80, W, 2, COL.dim, 0.6).setDepth(9);
 
   scene.hud.p1Name = scene.add
