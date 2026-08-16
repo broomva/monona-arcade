@@ -172,6 +172,17 @@ function onKeyUp(e) {
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
 
+// If the frame loses focus mid-press the matching keyup never arrives, which would
+// pin a player in a charge forever. On a cabinet nobody can reach, that is fatal.
+function releaseAllKeys() {
+  for (const key in held) held[key] = false;
+}
+
+window.addEventListener('blur', releaseAllKeys);
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) releaseAllKeys();
+});
+
 // Consume a rising edge. Returns true once per physical press.
 function pressed(code) {
   if (edge[code]) {
