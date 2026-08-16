@@ -29,28 +29,50 @@ const IDLE_MS = 45000;
 
 // --- Court geometry -------------------------------------------------------
 
-const COURT = { x: 170, y: 84, w: 460, h: 320 };
-const BOCIN = { x: 400, y: 232, hole: 26, ring: 40 };
+// Federación geometry, held to as closely as a 800x600 arcade screen allows.
+// The cajón is a 1 m x 1 m box of greda standing 35 cm at the back and 5 cm at the
+// front, so its face tilts up and TOWARD the thrower. Seen down the lane from the
+// throwing line it foreshortens into a wide, shallow quad — that quad is CLAY.
+// A top-down view cannot show that tilt at all, which is why this is a lane view.
+const CLAY = { cx: 400, topY: 188, botY: 324, topW: 330, botW: 392 };
 
-const AIM_MIN_X = COURT.x + 24;
-const AIM_MAX_X = COURT.x + COURT.w - 24;
-const AIM_MIN_Y = COURT.y + 26;
-const AIM_MAX_Y = COURT.y + COURT.h - 28;
+// Bocín: iron ring, 11 cm internal bore, 2 cm wall, half-buried at the centre of
+// the clay. 11 cm against a 100 cm box is 11% of the face width; the hole is drawn
+// a shade generous so it stays a fair target at this resolution.
+const BOCIN = { x: 400, y: 252, hole: 24, ring: 34 };
+
+const AIM_MIN_Y = CLAY.topY + 12;
+const AIM_MAX_Y = CLAY.botY - 14;
+
+// Half-width of the clay face at a given screen y — the face is a trapezoid, so
+// the horizontal bound is a function of depth, not a constant.
+function clayHalfW(y) {
+  const t = clamp((y - CLAY.topY) / (CLAY.botY - CLAY.topY), 0, 1);
+  return (CLAY.topW + (CLAY.botW - CLAY.topW) * t) / 2;
+}
+
+function clampToClay(p) {
+  p.aimY = clamp(p.aimY, AIM_MIN_Y, AIM_MAX_Y);
+  const hw = clayHalfW(p.aimY) - 18;
+  p.aimX = clamp(p.aimX, CLAY.cx - hw, CLAY.cx + hw);
+}
 
 const MECHA_SLOTS = 8;
 const MECHA_MAX_ALIVE = 4;
-const MECHA_HIT_R = 18;
+const MECHA_HIT_R = 17;
+// Vertical squash of the tilted clay plane as seen from the throwing line.
+const FORESHORTEN = 0.775;
 const MECHA_RESPAWN_MS = 1900;
 
 // --- Throw tuning ---------------------------------------------------------
 
-const AIM_SPEED = 300;
-const AIM_SPEED_CHARGING = 132;
+const AIM_SPEED = 210;
+const AIM_SPEED_CHARGING = 92;
 const SWEEP_MS = 1050;
 const SWEET_LO = 0.8;
 const SWEET_HI = 0.94;
 const BURN_SWEEPS = 2;
-const SCATTER_MAX = 132;
+const SCATTER_MAX = 128;
 const FLIGHT_MS = 520;
 const RECOVER_MS = 250;
 
@@ -60,6 +82,7 @@ const COL = {
   clay: 0x8a4526,
   clayDark: 0x5f2d17,
   clayLight: 0xa8593a,
+  clayWet: 0x4a2110,
   frame: 0x3f2410,
   frameLip: 0x6a4020,
   metal: 0xd7d7c4,
@@ -74,6 +97,19 @@ const COL = {
   gold: 0xffd21e,
   blue: 0x2f6bd8,
   crowd: 0x131a10,
+  // Shed: concrete walls under flat workshop light, sheet-metal roof.
+  wall: 0x4a4034,
+  wallLit: 0x6b5d4b,
+  roof: 0x2b2721,
+  beam: 0x3a332a,
+  board: 0x6b4523,
+  boardLip: 0x8a5c30,
+  // Traditional canchas run on sand or bare dirt.
+  sand: 0x8a7550,
+  sandDark: 0x6a5a3c,
+  sandLit: 0xa89066,
+  crate: 0xb8342c,
+  crateDark: 0x7d221d,
 };
 
 const CSS = {
@@ -255,6 +291,9 @@ function create() {
 
   buildBackdrop(scene);
   buildCourt(scene);
+  buildVenue(scene);
+  buildLights(scene);
+  buildHaze(scene);
   buildPlayfieldFx(scene);
   buildHud(scene);
   buildThrowers(scene);
@@ -349,136 +388,555 @@ function update(time, delta) {
 
 function buildBackdrop(scene) {
   scene.add.rectangle(W / 2, H / 2, W, H, COL.backdrop);
-
-  // A warm pool of light over the court, the way a tejo cancha is lit at night.
-  const glow = scene.add.graphics();
-  for (let i = 8; i >= 1; i--) {
-    glow.fillStyle(0x2a1a08, 0.045);
-    glow.fillEllipse(400, 260, 260 + i * 66, 200 + i * 46);
-  }
-
-  scene.add.rectangle(W / 2, H / 2, W, H, COL.night, 0.28);
-
-  // Banderines — Colombian flag bunting strung above the court.
-  const flagCols = [COL.gold, COL.blue, COL.red];
-  for (let i = 0; i < 17; i++) {
-    const x = 24 + i * 47;
-    const y = 8 + Math.sin(i * 0.9) * 4;
-    scene.add
-      .triangle(x, y, 0, 0, 26, 0, 13, 22, flagCols[i % 3])
-      .setAlpha(0.5)
-      .setDepth(-1);
-  }
-
-  // Spectators packed along both touchlines, plus the obligatory crate of beer.
-  buildCrowd(scene);
-  buildCrate(scene);
-
-  scene.add
-    .text(400, H - 13, 'PLATANUS HACK 26  ·  BOGOTA  ·  CANCHA DE TEJO', {
-      fontFamily: 'monospace',
-      fontSize: '11px',
-      color: CSS.dim,
-    })
-    .setOrigin(0.5)
-    .setDepth(2);
 }
 
+// Bare bulbs strung over the lanes. A traditional cancha is lit flat and
+// daylight-bright like a workshop — NOT the moody bar lighting this originally
+// had. Sources describe players lit "as if they had daylight overhead", and the
+// overheads flicker.
+function buildLights(scene) {
+  scene.bulbs = [];
+  const g = scene.add.graphics();
+  g.setDepth(6);
+  for (const x of [180, 400, 620]) {
+    g.lineStyle(1, 0x000000, 0.5);
+    g.lineBetween(x, 106, x, 132);
+    const halo = scene.add.circle(x, 138, 30, 0xfff3c4, 0.1).setDepth(6);
+    const bulb = scene.add.circle(x, 138, 7, 0xfff8d8).setDepth(7);
+    scene.bulbs.push({ bulb, halo });
+    // Flicker, staggered per fixture.
+    scene.tweens.add({
+      targets: [bulb, halo],
+      alpha: 0.72,
+      duration: 90 + (x % 7) * 40,
+      yoyo: true,
+      repeat: -1,
+      delay: x % 5 * 130,
+    });
+  }
+  // Flat wash from above, thrown across the whole shed rather than pooled.
+  const wash = scene.add.graphics();
+  wash.setDepth(6);
+  for (let i = 0; i < 6; i++) {
+    wash.fillStyle(0xfff0c0, 0.018);
+    wash.fillEllipse(400, 250 + i * 20, 760 - i * 40, 300 - i * 22);
+  }
+}
+
+// Suspended clay dust and powder smoke. Sources are emphatic that the air itself
+// is a visible feature — it "hangs in the air and clings to any dark fabric".
+function buildHaze(scene) {
+  scene.haze = [];
+  for (let i = 0; i < 16; i++) {
+    const m = scene.add
+      .circle(pseudo(i * 5.7) * W, 120 + pseudo(i * 2.1) * 300, 24 + pseudo(i * 3.9) * 46, 0xc9b48a, 0.035)
+      .setDepth(8);
+    scene.haze.push(m);
+    scene.tweens.add({
+      targets: m,
+      x: m.x + (pseudo(i * 8.3) * 2 - 1) * 70,
+      y: m.y - 18 - pseudo(i * 4.4) * 26,
+      alpha: 0.012,
+      duration: 7000 + pseudo(i * 6.6) * 6000,
+      yoyo: true,
+      repeat: -1,
+    });
+  }
+}
+
+
+// Everything that makes the shed a cancha rather than a hall with a clay box in
+// it. Ranked from the reference material by how strongly each element signals the
+// place: crates first, then the branding-as-decor, then the working clutter.
+function buildVenue(scene) {
+  buildCrateWall(scene);
+  buildBanners(scene);
+  buildSigns(scene);
+  buildTables(scene);
+  buildRockola(scene);
+  buildCuidadorKit(scene);
+  buildCrowd(scene);
+
+}
+
+// Stacked beer crates: wall, decor and seating all at once. The single most
+// tejo-specific piece of set dressing there is.
+function crateStack(scene, x, y, cols, rows, sc) {
+  const g = scene.add.graphics();
+  g.setDepth(9);
+  const cw = 44 * sc;
+  const ch = 26 * sc;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const bx = x + c * cw;
+      const by = y - r * ch;
+      g.fillStyle(r % 2 ? COL.crate : COL.crateDark, 1);
+      g.fillRect(bx, by, cw - 3, ch - 3);
+      // Moulded rim and the dark cell grid that makes a crate read as a crate.
+      g.lineStyle(2 * sc, 0x000000, 0.5);
+      g.strokeRect(bx, by, cw - 3, ch - 3);
+      g.fillStyle(0x000000, 0.42);
+      for (let b = 0; b < 4; b++) {
+        g.fillRect(bx + 4 * sc + b * 9.5 * sc, by + 5 * sc, 6 * sc, ch - 12 * sc);
+      }
+      // Caps of the bottles sitting in it.
+      g.fillStyle(0xd8b45a, 0.85);
+      for (let b = 0; b < 4; b++) {
+        g.fillRect(bx + 5 * sc + b * 9.5 * sc, by + 6 * sc, 4 * sc, 3 * sc);
+      }
+      g.fillStyle(0xffffff, 0.06);
+      g.fillRect(bx, by, cw - 3, 3 * sc);
+    }
+  }
+  return g;
+}
+
+function buildCrateWall(scene) {
+  // Columns flanking the throwing end, and a low wall along the back of the shed.
+  crateStack(scene, 4, 566, 2, 5, 1);
+  crateStack(scene, 706, 566, 2, 4, 1);
+  crateStack(scene, 96, 588, 2, 2, 0.8);
+  crateStack(scene, 636, 588, 2, 2, 0.8);
+  // A distant wall of crates stacked against the shed wall, small with depth.
+  crateStack(scene, 10, 372, 4, 3, 0.5);
+  crateStack(scene, 690, 372, 2, 3, 0.5);
+}
+
+// Hand-lettered signage. In a real cancha the brewery advertising IS the interior
+// design; these are the generic house signs that hang alongside it.
+function buildSigns(scene) {
+  const mk = (x, y, txt, col, size, rot) => {
+    const t = scene.add
+      .text(x, y, txt, {
+        fontFamily: 'monospace',
+        fontSize: size + 'px',
+        color: col,
+        fontStyle: 'bold',
+        backgroundColor: '#00000055',
+      })
+      .setOrigin(0.5)
+      .setDepth(9)
+      .setAlpha(0.75);
+    if (rot) t.setAngle(rot);
+    return t;
+  };
+  mk(96, 150, 'CERVEZA\nBIEN FRIA', CSS.gold, 13, -3);
+  mk(700, 148, 'PICADAS', CSS.gold, 13, 2);
+  mk(700, 178, 'EMPANADAS', CSS.metal, 10, 2);
+  mk(96, 196, 'HOY NO SE FIA', CSS.red, 10, -3);
+  mk(212, 122, 'TURMEQUE', CSS.metal, 11, -2);
+  mk(592, 120, 'REGLAMENTO', CSS.metal, 10, 2);
+}
+
+// In a real cancha the brewery advertising IS the interior design — banners and
+// painted livery do all the decorative work. These evoke that without borrowing
+// any actual brand: generic house banners in the colours breweries print in.
+function buildBanners(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(8);
+  const strips = [
+    [10, 234, 150, 26, COL.crate, 'CERVEZA'],
+    [640, 232, 150, 26, 0x1d4a8a, 'LA FRIA'],
+    [16, 286, 128, 22, 0xd8a416, 'PICADAS'],
+    [656, 288, 128, 22, 0x2d7a3a, 'TEJO'],
+  ];
+  for (const [x, y, w2, h2, col] of strips) {
+    g.fillStyle(0x000000, 0.35);
+    g.fillRect(x + 3, y + 3, w2, h2);
+    g.fillStyle(col, 0.9);
+    g.fillRect(x, y, w2, h2);
+    g.fillStyle(0xffffff, 0.14);
+    g.fillRect(x, y, w2, 5);
+    g.lineStyle(1, 0x000000, 0.4);
+    g.strokeRect(x, y, w2, h2);
+  }
+  for (const [x, y, w2, h2, , label] of strips) {
+    scene.add
+      .text(x + w2 / 2, y + h2 / 2, label, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#f7f2e0',
+        fontStyle: 'bold',
+      })
+      .setOrigin(0.5)
+      .setDepth(8)
+      .setAlpha(0.85);
+  }
+}
+
+function buildTables(scene) {
+  for (const [x, y, sc] of [[118, 540, 1], [676, 542, 1]]) {
+    const g = scene.add.graphics();
+    g.setDepth(9);
+    g.fillStyle(0x000000, 0.3);
+    g.fillEllipse(x, y + 20 * sc, 74 * sc, 14 * sc);
+    g.fillStyle(0xd9c98a, 1);
+    g.fillEllipse(x, y, 70 * sc, 24 * sc);
+    g.lineStyle(2, 0x8a7a4a, 1);
+    g.strokeEllipse(x, y, 70 * sc, 24 * sc);
+    // Bottles and a couple of small plastic cups.
+    for (let i = 0; i < 4; i++) {
+      const bx = x - 24 * sc + i * 16 * sc;
+      g.fillStyle(0x24380f, 1);
+      g.fillRect(bx, y - 22 * sc, 7 * sc, 20 * sc);
+      g.fillStyle(0xd8b45a, 1);
+      g.fillRect(bx, y - 24 * sc, 7 * sc, 4 * sc);
+    }
+    g.fillStyle(0xdedede, 0.85);
+    g.fillRect(x + 22 * sc, y - 10 * sc, 8 * sc, 9 * sc);
+  }
+}
+
+// The rockola. Canonically the source of the música popular a cancha runs on.
+function buildRockola(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(9);
+  const x = 44;
+  const y = 470;
+  g.fillStyle(0x000000, 0.35);
+  g.fillEllipse(x + 22, y + 62, 66, 12);
+  g.fillStyle(0x5a2320, 1);
+  g.fillRect(x, y, 46, 62);
+  g.fillStyle(0x8a3a30, 1);
+  g.fillRect(x + 3, y + 3, 40, 22);
+  g.fillStyle(0xffd21e, 0.75);
+  g.fillRect(x + 6, y + 6, 34, 16);
+  g.fillStyle(0x2a1408, 1);
+  for (let i = 0; i < 4; i++) g.fillRect(x + 6, y + 32 + i * 7, 34, 4);
+  scene.rockolaGlow = scene.add.circle(x + 23, y + 14, 20, 0xffd21e, 0.12).setDepth(9);
+  scene.tweens.add({
+    targets: scene.rockolaGlow,
+    alpha: 0.28,
+    duration: 900,
+    yoyo: true,
+    repeat: -1,
+  });
+}
+
+// The cuidador's kit that lives at the box: jute sack, hooks for pulling tejos
+// out of the clay, and the tamper used to smooth the surface between rounds.
+function buildCuidadorKit(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(6);
+  // Jute sack slumped at the foot of the cajón.
+  g.fillStyle(0x9c8b5a, 1);
+  g.fillEllipse(238, 366, 46, 26);
+  g.fillStyle(0x7d6f47, 1);
+  g.fillEllipse(238, 360, 40, 18);
+  // Tamper leaning on the frame.
+  g.lineStyle(4, 0x6b4523, 1);
+  g.lineBetween(566, 372, 588, 316);
+  g.fillStyle(0x4a4034, 1);
+  g.fillRect(578, 306, 22, 12);
+  // Extraction hooks hung on the frame edge.
+  g.lineStyle(2, COL.metalDark, 1);
+  g.lineBetween(214, 330, 210, 352);
+  g.lineBetween(222, 330, 226, 352);
+}
+
+// Spectators: standing along the lane sides and sitting on empty crates. Loud,
+// per every account — they bob when a mecha goes up.
 function buildCrowd(scene) {
   scene.crowd = [];
-  const cols = [0x1c2415, 0x232c18, 0x161d10];
-  for (let i = 0; i < 22; i++) {
-    const left = i % 2 === 0;
-    const idx = Math.floor(i / 2);
-    const x = left ? 24 + (idx % 3) * 42 : W - 24 - (idx % 3) * 42;
-    const y = 120 + idx * 42 + (i % 2) * 16;
-    if (y > 470) continue;
+  const cols = [0x2b2f22, 0x363a28, 0x22261b];
+  const spots = [
+    [58, 452, 1], [104, 466, 1.05], [150, 480, 1.1],
+    [742, 452, 1], [696, 468, 1.05], [650, 482, 1.1],
+    [36, 344, 0.72], [92, 336, 0.66], [764, 344, 0.72], [710, 336, 0.66],
+  ];
+  for (let i = 0; i < spots.length; i++) {
+    const [x, y, sc] = spots[i];
     const g = scene.add.container(x, y);
-    const body = scene.add.ellipse(0, 14, 30, 34, cols[i % 3]);
-    const head = scene.add.circle(0, -8, 11, cols[(i + 1) % 3]);
-    g.add([body, head]);
-    g.setDepth(0);
-    g.setAlpha(0.9);
+    g.add(scene.add.ellipse(0, 8 * sc, 30 * sc, 40 * sc, cols[i % 3]));
+    g.add(scene.add.circle(0, -18 * sc, 11 * sc, 0x8a6a4a));
+    g.add(scene.add.rectangle(0, -26 * sc, 24 * sc, 7 * sc, cols[(i + 1) % 3]));
+    g.setDepth(10);
+    g.setData('baseY', y);
     scene.crowd.push(g);
   }
 }
 
-function buildCrate(scene) {
-  const c = scene.add.container(400, 546);
-  c.add(scene.add.rectangle(0, 6, 96, 44, 0x3a2a12).setStrokeStyle(2, 0x60451e));
-  for (let i = 0; i < 6; i++) {
-    const bx = -36 + (i % 3) * 36;
-    const by = i < 3 ? -4 : 16;
-    c.add(scene.add.rectangle(bx, by, 14, 20, 0x6b3f12));
-    c.add(scene.add.rectangle(bx, by - 8, 8, 6, 0xd8b45a));
+function buildCourt(scene) {
+  // ---- The shed itself -------------------------------------------------
+  // A cancha is a converted warehouse: concrete walls, sheet-metal roof, and
+  // light that reads like a workshop rather than a bar.
+  const wall = scene.add.graphics();
+  wall.setDepth(0);
+  wall.fillStyle(COL.wall, 1);
+  wall.fillRect(0, 76, W, 300);
+
+  // Corrugated roof and its beams.
+  wall.fillStyle(COL.roof, 1);
+  wall.fillRect(0, 76, W, 30);
+  wall.lineStyle(1, 0x000000, 0.25);
+  for (let i = 0; i < 34; i++) wall.lineBetween(i * 24, 76, i * 24, 106);
+  wall.fillStyle(COL.beam, 1);
+  wall.fillRect(0, 104, W, 7);
+
+  // Years of 680 g iron discs missing the box. Sources describe walls that
+  // "look like they have been through a shootout" — this is that texture.
+  for (let i = 0; i < 130; i++) {
+    const gx = pseudo(i * 5.3) * W;
+    const gy = 118 + pseudo(i * 2.9 + 4.1) * 232;
+    const gr = 2 + pseudo(i * 8.1) * 7;
+    const near = Math.abs(gx - 400) < 230 && gy < 330;
+    wall.fillStyle(0x000000, near ? 0.36 : 0.2);
+    wall.fillCircle(gx, gy, gr);
+    wall.fillStyle(COL.wallLit, near ? 0.24 : 0.13);
+    wall.fillCircle(gx - gr * 0.3, gy - gr * 0.35, gr * 0.62);
   }
-  c.setDepth(1);
+  // Powder soot fanning up off the cajón.
+  for (let i = 0; i < 5; i++) {
+    wall.fillStyle(0x000000, 0.05);
+    wall.fillEllipse(400, 210, 300 + i * 70, 210 + i * 46);
+  }
+
+  buildNeighbourLanes(scene);
+  buildTablero(scene);
+  buildCajon(scene);
+  buildLane(scene);
 }
 
-function buildCourt(scene) {
-  const cx = COURT.x + COURT.w / 2;
-  const cy = COURT.y + COURT.h / 2;
+// Neighbouring lanes, packed "as close together as the lanes of an avenue".
+// Only their cajones and dividers are visible at the edges of frame.
+function buildNeighbourLanes(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(0);
+  for (const side of [-1, 1]) {
+    for (let k = 1; k <= 2; k++) {
+      const cx = 400 + side * (352 + (k - 1) * 150);
+      const sc = 1 - k * 0.16;
+      g.fillStyle(COL.frame, 1);
+      g.fillRect(cx - 78 * sc, 208, 156 * sc, 120 * sc);
+      g.fillStyle(COL.clayDark, 1);
+      g.fillRect(cx - 66 * sc, 216, 132 * sc, 96 * sc);
+      g.fillStyle(COL.hole, 0.9);
+      g.fillCircle(cx, 262, 13 * sc);
+      g.fillStyle(0x000000, 0.42);
+      g.fillRect(cx - 82 * sc, 204, 164 * sc, 130 * sc);
+    }
+  }
+}
 
-  // Wooden cajón around the clay.
-  scene.add
-    .rectangle(cx, cy, COURT.w + 26, COURT.h + 26, COL.frame)
-    .setStrokeStyle(3, COL.frameLip);
+// The tablero: a wooden board 1.5 m x 1 m standing directly behind the box to
+// stop stray tejos. Round and square both exist in the wild; the round one is
+// the more distinctive silhouette. Painted in flag colours, as seen on real ones.
+function buildTablero(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(1);
+  const cx = 400;
+  const cy = 188;
+  const R = 118;
 
-  const clay = scene.add.graphics();
-  clay.fillStyle(COL.clay, 1);
-  clay.fillRect(COURT.x, COURT.y, COURT.w, COURT.h);
+  g.fillStyle(0x000000, 0.4);
+  g.fillCircle(cx + 5, cy + 6, R);
+  g.fillStyle(COL.board, 1);
+  g.fillCircle(cx, cy, R);
 
-  // Clay speckle. Deterministic-ish scatter so the surface reads as packed earth
-  // rather than a flat fill, drawn once into a single Graphics object.
-  for (let i = 0; i < 240; i++) {
-    const x = COURT.x + pseudo(i * 3.1) * COURT.w;
-    const y = COURT.y + pseudo(i * 7.7 + 1.3) * COURT.h;
-    const r = 1 + pseudo(i * 2.3) * 3.4;
-    clay.fillStyle(i % 3 === 0 ? COL.clayLight : COL.clayDark, 0.22);
-    clay.fillCircle(x, y, r);
+  // Only the band above the cajón lip is ever visible, so the flag is painted to
+  // read within it: amarillo over azul over rojo, as on real flag-painted tableros.
+  const top = cy - R;
+  const vis = CLAY.topY - top;
+  for (let y = top; y < CLAY.topY; y++) {
+    const dy = y - cy;
+    const dx = Math.sqrt(Math.max(0, R * R - dy * dy));
+    const f = (y - top) / vis;
+    g.fillStyle(f < 0.56 ? COL.gold : f < 0.78 ? COL.blue : COL.red, 0.92);
+    g.fillRect(cx - dx, y, dx * 2, 1);
   }
 
-  // Damp ring worked into the clay around the bocín.
-  clay.lineStyle(2, COL.clayDark, 0.5);
-  clay.strokeCircle(BOCIN.x, BOCIN.y, 96);
-  clay.lineStyle(1, COL.clayLight, 0.28);
-  clay.strokeCircle(BOCIN.x, BOCIN.y, 132);
+  g.fillStyle(0x000000, 0.2);
+  g.fillCircle(cx, cy, R);
+  g.lineStyle(5, COL.boardLip, 1);
+  g.strokeCircle(cx, cy, R);
+
+  // Plank seams and the pocking left by every tejo that missed the box.
+  g.lineStyle(1, 0x000000, 0.28);
+  for (let k = -2; k <= 2; k++) {
+    const yy = cy + k * 34;
+    const dx = Math.sqrt(Math.max(0, R * R - (yy - cy) * (yy - cy)));
+    g.lineBetween(cx - dx, yy, cx + dx, yy);
+  }
+  for (let i2 = 0; i2 < 40; i2++) {
+    const a = pseudo(i2 * 3.7) * Math.PI * 2;
+    const r = Math.sqrt(pseudo(i2 * 6.1)) * (R - 8);
+    const px = cx + Math.cos(a) * r;
+    const py = cy + Math.sin(a) * r;
+    if (py > CLAY.topY) continue;
+    g.fillStyle(0x000000, 0.42);
+    g.fillCircle(px, py, 2 + pseudo(i2 * 1.9) * 5);
+  }
+}
+
+// The cajón: timber frame, heaped greda, half-buried bocín.
+function buildCajon(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(2);
+
+  const tw = CLAY.topW / 2;
+  const bw = CLAY.botW / 2;
+
+  // Timber frame standing proud of the clay on all four sides.
+  g.fillStyle(COL.frame, 1);
+  g.fillPoints([
+    { x: CLAY.cx - tw - 20, y: CLAY.topY - 16 },
+    { x: CLAY.cx + tw + 20, y: CLAY.topY - 16 },
+    { x: CLAY.cx + bw + 26, y: CLAY.botY + 22 },
+    { x: CLAY.cx - bw - 26, y: CLAY.botY + 22 },
+  ], true);
+  g.fillStyle(COL.frameLip, 1);
+  g.fillPoints([
+    { x: CLAY.cx - bw - 26, y: CLAY.botY + 22 },
+    { x: CLAY.cx + bw + 26, y: CLAY.botY + 22 },
+    { x: CLAY.cx + bw + 26, y: CLAY.botY + 32 },
+    { x: CLAY.cx - bw - 26, y: CLAY.botY + 32 },
+  ], true);
+
+  // The greda itself. Kept damp by the cuidador so it catches the tejo.
+  g.fillStyle(COL.clay, 1);
+  g.fillPoints([
+    { x: CLAY.cx - tw, y: CLAY.topY },
+    { x: CLAY.cx + tw, y: CLAY.topY },
+    { x: CLAY.cx + bw, y: CLAY.botY },
+    { x: CLAY.cx - bw, y: CLAY.botY },
+  ], true);
+
+  // Worked surface: tamper strokes, damp sheen up top, packed speckle.
+  for (let i = 0; i < 300; i++) {
+    const t = pseudo(i * 7.7 + 1.3);
+    const y = CLAY.topY + t * (CLAY.botY - CLAY.topY);
+    const hw = clayHalfW(y);
+    const x = CLAY.cx + (pseudo(i * 3.1) * 2 - 1) * hw;
+    const r = 1 + pseudo(i * 2.3) * 3.6;
+    g.fillStyle(i % 3 === 0 ? COL.clayLight : COL.clayDark, 0.24);
+    g.fillCircle(x, y, r);
+  }
+  // Tamper strokes. The cuidador smooths the face between rounds with a pistón,
+  // leaving shallow horizontal arcs across the clay.
+  for (let i = 0; i < 11; i++) {
+    const y = CLAY.topY + 9 + i * 13;
+    const hw = clayHalfW(y) - 10;
+    g.lineStyle(3, COL.clayLight, 0.075);
+    g.beginPath();
+    g.moveTo(CLAY.cx - hw, y);
+    g.lineTo(CLAY.cx, y + 3);
+    g.lineTo(CLAY.cx + hw, y);
+    g.strokePath();
+    g.lineStyle(1, COL.clayDark, 0.09);
+    g.lineBetween(CLAY.cx - hw, y + 4, CLAY.cx + hw, y + 4);
+  }
+
+  // Damp patches — the face is watered to keep it catching the tejo.
+  for (let i = 0; i < 14; i++) {
+    const y = CLAY.topY + 14 + pseudo(i * 11.3) * (CLAY.botY - CLAY.topY - 26);
+    const hw = clayHalfW(y) - 24;
+    const x = CLAY.cx + (pseudo(i * 5.9) * 2 - 1) * hw;
+    g.fillStyle(COL.clayWet, 0.16);
+    g.fillEllipse(x, y, 26 + pseudo(i * 2.7) * 44, (12 + pseudo(i * 4.1) * 18) * FORESHORTEN);
+  }
+
+  // Old bites left by earlier tejos, deepest near the bocín where most land.
+  for (let i = 0; i < 26; i++) {
+    const a = pseudo(i * 3.3) * Math.PI * 2;
+    const r = 26 + Math.sqrt(pseudo(i * 7.1)) * 120;
+    const x = BOCIN.x + Math.cos(a) * r;
+    const y = BOCIN.y + Math.sin(a) * r * FORESHORTEN;
+    if (y < CLAY.topY + 6 || y > CLAY.botY - 6) continue;
+    if (Math.abs(x - CLAY.cx) > clayHalfW(y) - 10) continue;
+    g.fillStyle(0x000000, 0.2);
+    g.fillEllipse(x, y, 13, 9);
+    g.fillStyle(COL.clayLight, 0.13);
+    g.fillEllipse(x - 1, y - 2, 10, 6);
+  }
+  g.fillStyle(COL.clayLight, 0.1);
+  g.fillPoints([
+    { x: CLAY.cx - tw, y: CLAY.topY },
+    { x: CLAY.cx + tw, y: CLAY.topY },
+    { x: CLAY.cx + clayHalfW(CLAY.topY + 46), y: CLAY.topY + 46 },
+    { x: CLAY.cx - clayHalfW(CLAY.topY + 46), y: CLAY.topY + 46 },
+  ], true);
+  // Shadow pooling at the low front lip.
+  g.fillStyle(0x000000, 0.22);
+  g.fillPoints([
+    { x: CLAY.cx - clayHalfW(CLAY.botY - 26), y: CLAY.botY - 26 },
+    { x: CLAY.cx + clayHalfW(CLAY.botY - 26), y: CLAY.botY - 26 },
+    { x: CLAY.cx + bw, y: CLAY.botY },
+    { x: CLAY.cx - bw, y: CLAY.botY },
+  ], true);
 
   scene.marksLayer = scene.add.graphics();
   scene.marksLayer.setDepth(3);
 
-  // Bocín: sunken hole, steel ring, highlight.
+  // Bocín: iron ring seated half-buried, bore in shadow.
   const b = scene.add.graphics();
   b.setDepth(4);
+  b.fillStyle(0x000000, 0.5);
+  b.fillEllipse(BOCIN.x, BOCIN.y + 5, BOCIN.ring * 2.3, BOCIN.ring * 1.5);
   b.fillStyle(COL.hole, 1);
-  b.fillCircle(BOCIN.x, BOCIN.y, BOCIN.hole);
-  b.lineStyle(9, COL.metalDark, 1);
-  b.strokeCircle(BOCIN.x, BOCIN.y, BOCIN.ring);
-  b.lineStyle(4, COL.metal, 1);
-  b.strokeCircle(BOCIN.x, BOCIN.y, BOCIN.ring - 2);
-  b.lineStyle(2, COL.white, 0.4);
-  b.beginPath();
-  b.arc(BOCIN.x, BOCIN.y, BOCIN.ring - 2, deg(-150), deg(-40));
-  b.strokePath();
+  b.fillEllipse(BOCIN.x, BOCIN.y, BOCIN.hole * 2, BOCIN.hole * 1.55);
+  b.lineStyle(8, COL.metalDark, 1);
+  b.strokeEllipse(BOCIN.x, BOCIN.y, BOCIN.ring * 2, BOCIN.ring * 1.55);
+  b.lineStyle(3.5, COL.metal, 1);
+  b.strokeEllipse(BOCIN.x, BOCIN.y - 1, BOCIN.ring * 2 - 4, BOCIN.ring * 1.55 - 4);
 
   scene.mechaLayer = scene.add.container(0, 0);
   scene.mechaLayer.setDepth(5);
+}
 
+// The lane between the throwing line and the cajón, widening toward the viewer.
+function buildLane(scene) {
+  const g = scene.add.graphics();
+  g.setDepth(1);
+  const NY = 486;
+  const FY = CLAY.botY + 32;
+
+  g.fillStyle(COL.sand, 1);
+  g.fillPoints([
+    { x: 250, y: FY }, { x: 550, y: FY },
+    { x: 726, y: NY }, { x: 74, y: NY },
+  ], true);
+  // Trodden sand, scuffed toward the throwing line.
+  for (let i = 0; i < 150; i++) {
+    const t = pseudo(i * 4.3);
+    const y = FY + t * (NY - FY);
+    const half = 150 + t * 176;
+    const x = 400 + (pseudo(i * 9.1) * 2 - 1) * half;
+    g.fillStyle(i % 2 ? COL.sandDark : COL.sandLit, 0.3);
+    g.fillCircle(x, y, 1 + pseudo(i * 3.3) * 4);
+  }
+  // Board dividers down both sides of the lane.
+  for (const side of [-1, 1]) {
+    g.fillStyle(COL.frame, 1);
+    g.fillPoints([
+      { x: 400 + side * 150, y: FY },
+      { x: 400 + side * 163, y: FY },
+      { x: 400 + side * 339, y: NY },
+      { x: 400 + side * 326, y: NY },
+    ], true);
+    g.fillStyle(0x000000, 0.3);
+    g.fillPoints([
+      { x: 400 + side * 150, y: FY },
+      { x: 400 + side * 155, y: FY },
+      { x: 400 + side * 331, y: NY },
+      { x: 400 + side * 326, y: NY },
+    ], true);
+  }
+
+  // Throwing line, and the real distance between bocines.
   scene.chalk = scene.add.graphics();
-  scene.chalk.setDepth(1);
-  scene.chalk.lineStyle(2, COL.white, 0.13);
-  scene.chalk.strokeRect(COURT.x + 8, COURT.y + 8, COURT.w - 16, COURT.h - 16);
-  scene.chalk.lineStyle(3, COL.white, 0.1);
-  scene.chalk.lineBetween(150, 478, 650, 478);
+  scene.chalk.setDepth(2);
+  scene.chalk.lineStyle(3, COL.white, 0.16);
+  scene.chalk.lineBetween(78, NY, 722, NY);
   scene.add
-    .text(664, 478, '19,5 m', {
+    .text(400, NY + 13, '17,5 m  ENTRE BOCINES', {
       fontFamily: 'monospace',
-      fontSize: '11px',
+      fontSize: '10px',
       color: CSS.dim,
     })
     .setOrigin(0.5)
     .setDepth(2);
 }
+
 
 function buildPlayfieldFx(scene) {
   scene.fxLayer = scene.add.container(0, 0);
@@ -581,12 +1039,12 @@ function buildHud(scene) {
 
 function buildThrowers(scene) {
   scene.throwers = {
-    p1: makeThrower(scene, 206, 508, COL.p1, 1),
-    p2: makeThrower(scene, 594, 508, COL.p2, -1),
+    p1: makeThrower(scene, 244, 540, COL.p1, 1),
+    p2: makeThrower(scene, 556, 540, COL.p2, -1),
   };
 
   scene.add
-    .text(206, 560, 'P1', {
+    .text(244, 592, 'P1', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: CSS.p1,
@@ -595,7 +1053,7 @@ function buildThrowers(scene) {
     .setOrigin(0.5)
     .setDepth(3);
   scene.add
-    .text(594, 560, 'P2', {
+    .text(556, 592, 'P2', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: CSS.p2,
@@ -605,17 +1063,24 @@ function buildThrowers(scene) {
     .setDepth(3);
 }
 
+// Seen from behind, at the throwing line, looking down the lane — which is the
+// view a tejo player actually has. Underhand throw, non-throwing arm out.
 function makeThrower(scene, x, y, color, facing) {
   const c = scene.add.container(x, y);
-  c.setDepth(6);
-  const shadow = scene.add.ellipse(0, 30, 46, 14, 0x000000, 0.35);
-  const legs = scene.add.rectangle(0, 16, 22, 22, 0x2c3320);
-  const body = scene.add.ellipse(0, -2, 34, 40, color);
-  const head = scene.add.circle(0, -30, 13, 0xe8c9a0);
-  const cap = scene.add.rectangle(0, -38, 28, 9, color).setStrokeStyle(1, 0x000000, 0.3);
-  const arm = scene.add.rectangle(facing * 18, -6, 10, 26, color).setOrigin(0.5, 0.1);
-  const disc = scene.add.circle(facing * 22, 8, 7, COL.metal).setStrokeStyle(2, COL.metalDark);
-  c.add([shadow, legs, body, head, cap, arm, disc]);
+  c.setDepth(11);
+  const shadow = scene.add.ellipse(0, 40, 54, 16, 0x000000, 0.4);
+  const legs = scene.add.rectangle(0, 22, 26, 34, 0x2f3524);
+  const body = scene.add.ellipse(0, -8, 42, 52, color);
+  // Back of the head, so the player is facing away toward the cajón.
+  const head = scene.add.circle(0, -44, 15, 0x5a4028);
+  const cap = scene.add.rectangle(0, -54, 32, 10, color).setStrokeStyle(1, 0x000000, 0.3);
+  const arm = scene.add.rectangle(facing * 23, -12, 11, 30, color).setOrigin(0.5, 0.1);
+  const offArm = scene.add.rectangle(-facing * 23, -12, 10, 26, color).setAlpha(0.85);
+  // The tejo is a truncated cone — 9 cm base, 5.5 cm top, ~680 g of iron.
+  const disc = scene.add
+    .triangle(facing * 27, 12, -9, 6, 9, 6, 5, -5, COL.metal)
+    .setStrokeStyle(1.5, COL.metalDark);
+  c.add([shadow, legs, body, offArm, arm, head, cap, disc]);
   return { container: c, arm, disc, facing, homeX: x, homeY: y };
 }
 
@@ -1018,16 +1483,23 @@ function makePlayer(scene, key, color, cpuSkill) {
 }
 
 function makeMecha(scene, slot) {
+  // The clay plane is foreshortened, so the bocín reads as an ellipse — and the
+  // packets have to sit on THAT rim, not on a circle, or they float off the ring.
   const angle = (slot / MECHA_SLOTS) * Math.PI * 2 - Math.PI / 2;
-  const x = BOCIN.x + Math.cos(angle) * BOCIN.ring;
-  const y = BOCIN.y + Math.sin(angle) * BOCIN.ring;
+  const x = BOCIN.x + Math.cos(angle) * (BOCIN.ring + 3);
+  const y = BOCIN.y + Math.sin(angle) * (BOCIN.ring + 3) * FORESHORTEN;
   const c = scene.add.container(x, y);
-  // A halo behind the packet so it never disappears into the clay.
-  const halo = scene.add.circle(0, 0, 15, COL.red, 0.16);
-  const paper = scene.add.triangle(0, 0, 0, 13, 14, -10, -14, -10, 0xfff4dc);
+  // Folded paper packet: an equilateral triangle 6 cm a side, squashed to lie flat
+  // on the tilted clay, with a shadow so it sits ON the surface rather than over it.
+  const halo = scene.add.ellipse(0, 1, 40, 40 * FORESHORTEN, COL.red, 0.14);
+  const shadow = scene.add.ellipse(2, 5, 28, 11, 0x000000, 0.45);
+  const paper = scene.add.triangle(0, 0, 0, 11, 15, -9, -15, -9, 0xfff4dc);
   paper.setStrokeStyle(2, 0x8a6a3a);
-  const fuse = scene.add.circle(0, -11, 3.4, COL.red);
-  c.add([halo, paper, fuse]);
+  paper.setScale(1, FORESHORTEN);
+  const fold = scene.add.line(0, 0, 0, 9, 0, -8, 0xc9b48a).setLineWidth(1).setAlpha(0.75);
+  fold.setScale(1, FORESHORTEN);
+  const fuse = scene.add.circle(0, -8 * FORESHORTEN, 3.2, COL.red);
+  c.add([halo, shadow, paper, fold, fuse]);
   c.setVisible(false);
   scene.mechaLayer.add(c);
   return { slot, x, y, alive: false, respawnAt: 0, node: c, fuse };
@@ -1116,8 +1588,7 @@ function stepPlayer(scene, m, p, dt, time) {
     if (held[dn]) p.aimY += speed;
   }
 
-  p.aimX = clamp(p.aimX, AIM_MIN_X, AIM_MAX_X);
-  p.aimY = clamp(p.aimY, AIM_MIN_Y, AIM_MAX_Y);
+  clampToClay(p);
 
   if (p.charging) {
     p.sweep += (dt / SWEEP_MS) * 2;
@@ -1153,10 +1624,16 @@ function releaseThrow(scene, m, p, time, burned) {
   const scatter = burned ? SCATTER_MAX : scatterFor(value);
   const perfect = scatter === 0;
 
+  // Scatter is circular in the plane of the clay, which foreshortens to an ellipse
+  // on screen. Sampling a screen-space circle would both over-scatter vertically
+  // and pile throws against the clamped top and bottom lips.
   const angle = Math.random() * Math.PI * 2;
   const radius = scatter * Math.sqrt(Math.random());
-  const tx = clamp(p.aimX + Math.cos(angle) * radius, COURT.x + 6, COURT.x + COURT.w - 6);
-  const ty = clamp(p.aimY + Math.sin(angle) * radius, COURT.y + 6, COURT.y + COURT.h - 6);
+  // A scattered tejo can bite the clay anywhere on the face, including the very
+  // lip of the cajón — but not off the box entirely.
+  const ty = clamp(p.aimY + Math.sin(angle) * radius * FORESHORTEN, CLAY.topY + 6, CLAY.botY - 6);
+  const thw = clayHalfW(ty) - 8;
+  const tx = clamp(p.aimX + Math.cos(angle) * radius, CLAY.cx - thw, CLAY.cx + thw);
 
   p.cooldown = FLIGHT_MS + RECOVER_MS;
   p.throws++;
@@ -1316,10 +1793,16 @@ function redrawMarks(scene, m) {
   const g = scene.marksLayer;
   g.clear();
   for (const mk of m.marks) {
-    g.fillStyle(0x2a1408, 0.5);
-    g.fillCircle(mk.x, mk.y, 10);
-    g.lineStyle(2, mk.color, 0.5);
-    g.strokeCircle(mk.x, mk.y, 8);
+    // A tejo bites the clay: a foreshortened crater with a raised lip, tinted
+    // faintly to whoever threw it.
+    g.fillStyle(0x000000, 0.34);
+    g.fillEllipse(mk.x, mk.y + 1, 22, 22 * FORESHORTEN);
+    g.fillStyle(COL.clayWet, 0.5);
+    g.fillEllipse(mk.x, mk.y, 17, 17 * FORESHORTEN);
+    g.fillStyle(COL.clayLight, 0.2);
+    g.fillEllipse(mk.x - 1, mk.y - 3, 13, 8 * FORESHORTEN);
+    g.lineStyle(1.5, mk.color, 0.35);
+    g.strokeEllipse(mk.x, mk.y, 19, 19 * FORESHORTEN);
   }
 }
 
@@ -1465,7 +1948,7 @@ function cpuPlan(scene, m, p, time) {
     : rand(0.12, SWEET_LO - 0.24);
 
   return {
-    x: clamp(x + rand(-err, err), AIM_MIN_X, AIM_MAX_X),
+    x: clamp(x + rand(-err, err), CLAY.cx - clayHalfW(y) + 20, CLAY.cx + clayHalfW(y) - 20),
     y: clamp(y + rand(-err, err), AIM_MIN_Y, AIM_MAX_Y),
     releaseAt,
     readyAt: time + rand(430, 1250) * (1.6 - skill),
@@ -2072,7 +2555,7 @@ function initAudio(scene) {
     if (!ctx) return;
     scene.audio.ctx = ctx;
     const master = ctx.createGain();
-    master.gain.value = 0.5;
+    master.gain.value = 0.68;
     master.connect(ctx.destination);
     scene.audio.gain = master;
     scene.audio.ready = true;
@@ -2151,18 +2634,22 @@ function sfx(scene, kind) {
   } else if (kind === 'beep') {
     tone(scene, 440, 0.12, 'square', 0.12);
   } else if (kind === 'charge') {
-    tone(scene, 300, 0.07, 'triangle', 0.07, 520);
+    tone(scene, 300, 0.09, 'triangle', 0.15, 520);
   } else if (kind === 'throw') {
-    noise(scene, 0.16, 0.16, 900, 3);
+    noise(scene, 0.22, 0.38, 2600, 1);
+    tone(scene, 420, 0.16, 'triangle', 0.1, 160);
   } else if (kind === 'burn') {
-    tone(scene, 260, 0.3, 'sawtooth', 0.1, 70);
+    tone(scene, 260, 0.36, 'sawtooth', 0.26, 70);
+    noise(scene, 0.3, 0.22, 700, 2);
   } else if (kind === 'thud') {
-    tone(scene, 120, 0.14, 'sine', 0.16, 62);
-    noise(scene, 0.1, 0.1, 500);
+    tone(scene, 120, 0.2, 'sine', 0.3, 62);
+    noise(scene, 0.14, 0.22, 620);
   } else if (kind === 'clang') {
-    tone(scene, 1180, 0.32, 'square', 0.1, 900);
-    tone(scene, 1760, 0.24, 'square', 0.06);
-    noise(scene, 0.08, 0.08, 5200, 6);
+    // Embocinada is a 6-point reward — it has to ring out over the throw whoosh.
+    tone(scene, 1180, 0.42, 'square', 0.26, 900);
+    tone(scene, 1760, 0.34, 'square', 0.16);
+    tone(scene, 590, 0.3, 'triangle', 0.2, 440);
+    noise(scene, 0.1, 0.2, 5200, 6);
   } else if (kind === 'boom') {
     noise(scene, 0.42, 0.42, 1300, 1);
     tone(scene, 130, 0.34, 'sine', 0.3, 40);
