@@ -79,7 +79,7 @@ const RECOVER_MS = 250;
 const COL = {
   night: 0x0a0c07,
   backdrop: 0x05060a,
-  clay: 0x8a5a3e,
+  clay: 0x8b6f4a,
   clayDark: 0x5c4130,
   clayLight: 0xa8886a,
   clayWet: 0x40312a,
@@ -89,7 +89,7 @@ const COL = {
   metalDark: 0x8d8d7a,
   hole: 0x24110a,
   p1: 0xe1ff00,
-  p2: 0xff4f9a,
+  p2: 0x35c8ff,
   white: 0xf7ffd8,
   slate: 0x9aa47c,
   dim: 0x4a5136,
@@ -105,10 +105,12 @@ const COL = {
   board: 0x6b4523,
   boardLip: 0x8a5c30,
   // Traditional canchas run on sand or bare dirt.
-  sand: 0x8a7550,
-  sandDark: 0x6a5a3c,
-  sandLit: 0xa89066,
-  mecha: 0xd6a4a5,
+  sand: 0x6b5f47,
+  sandDark: 0x51472f,
+  sandLit: 0x8a7a58,
+  mecha: 0xf792b4,
+  mechaFold: 0xffd9e6,
+  ash: 0x5a4a3c,
   scorch: 0x24242e,
   crate: 0xb8342c,
   crateDark: 0x7d221d,
@@ -116,7 +118,7 @@ const COL = {
 
 const CSS = {
   p1: '#e1ff00',
-  p2: '#ff4f9a',
+  p2: '#35c8ff',
   white: '#f7ffd8',
   slate: '#9aa47c',
   dim: '#5c6442',
@@ -828,6 +830,20 @@ function buildCajon(scene) {
     g.lineBetween(CLAY.cx - hw, y + 4, CLAY.cx + hw, y + 4);
   }
 
+  // Greda picada. The canchero pricks the whole face on a regular spacing and
+  // waters it through the holes so it stays soft enough to catch a tejo. The
+  // texture is visible in court photographs and is distinct from tejo craters.
+  for (let gy = CLAY.topY + 8; gy < CLAY.botY - 6; gy += 11) {
+    const hw = clayHalfW(gy) - 12;
+    const jitter = pseudo(gy * 0.7) * 8;
+    for (let gx = CLAY.cx - hw + jitter; gx < CLAY.cx + hw; gx += 13) {
+      g.fillStyle(0x000000, 0.16);
+      g.fillEllipse(gx, gy, 3.4, 3.4 * FORESHORTEN);
+      g.fillStyle(COL.clayLight, 0.1);
+      g.fillEllipse(gx, gy - 1.4, 3, 2 * FORESHORTEN);
+    }
+  }
+
   // Damp patches — the face is watered to keep it catching the tejo.
   for (let i = 0; i < 14; i++) {
     const y = CLAY.topY + 14 + pseudo(i * 11.3) * (CLAY.botY - CLAY.topY - 26);
@@ -857,7 +873,7 @@ function buildCajon(scene) {
     const y3 = BOCIN.y + Math.sin(a3) * r3 * FORESHORTEN;
     if (y3 < CLAY.topY + 6 || y3 > CLAY.botY - 6) continue;
     if (Math.abs(x3 - CLAY.cx) > clayHalfW(y3) - 10) continue;
-    g.fillStyle(COL.mecha, 0.5);
+    g.fillStyle(i % 3 === 0 ? COL.mecha : COL.ash, 0.55);
     g.fillEllipse(x3, y3, 6, 4);
   }
 
@@ -896,11 +912,11 @@ function buildCajon(scene) {
   // Bocín: iron ring seated half-buried, bore in shadow.
   const b = scene.add.graphics();
   b.setDepth(4);
-  b.fillStyle(0x000000, 0.5);
-  b.fillEllipse(BOCIN.x, BOCIN.y + 5, BOCIN.ring * 2.3, BOCIN.ring * 1.5);
+  b.fillStyle(0x000000, 0.34);
+  b.fillEllipse(BOCIN.x, BOCIN.y + 3, BOCIN.ring * 2.2, BOCIN.ring * 1.45);
   b.fillStyle(COL.hole, 1);
   b.fillEllipse(BOCIN.x, BOCIN.y, BOCIN.hole * 2, BOCIN.hole * 1.55);
-  b.lineStyle(8, COL.metalDark, 1);
+  b.lineStyle(6, COL.metalDark, 1);
   b.strokeEllipse(BOCIN.x, BOCIN.y, BOCIN.ring * 2, BOCIN.ring * 1.55);
   b.lineStyle(3.5, COL.metal, 1);
   b.strokeEllipse(BOCIN.x, BOCIN.y - 1, BOCIN.ring * 2 - 4, BOCIN.ring * 1.55 - 4);
@@ -1517,12 +1533,12 @@ function makeMecha(scene, slot) {
   const c = scene.add.container(x, y);
   // Folded paper packet: an equilateral triangle 6 cm a side, squashed to lie flat
   // on the tilted clay, with a shadow so it sits ON the surface rather than over it.
-  const halo = scene.add.ellipse(0, 1, 40, 40 * FORESHORTEN, COL.red, 0.14);
+  const halo = scene.add.ellipse(0, 1, 42, 42 * FORESHORTEN, COL.mecha, 0.18);
   const shadow = scene.add.ellipse(2, 5, 28, 11, 0x000000, 0.45);
   const paper = scene.add.triangle(0, 0, 0, 11, 15, -9, -15, -9, COL.mecha);
-  paper.setStrokeStyle(2, 0x9c5a5c);
+  paper.setStrokeStyle(2, 0xb03f66);
   paper.setScale(1, FORESHORTEN);
-  const fold = scene.add.line(0, 0, 0, 9, 0, -8, 0xf2ddd2).setLineWidth(1.4).setAlpha(0.9);
+  const fold = scene.add.line(0, 0, 0, 9, 0, -8, COL.mechaFold).setLineWidth(1.4).setAlpha(0.9);
   fold.setScale(1, FORESHORTEN);
   const fuse = scene.add.circle(0, -8 * FORESHORTEN, 3.2, COL.red);
   c.add([halo, shadow, paper, fold, fuse]);
