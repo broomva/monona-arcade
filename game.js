@@ -2072,7 +2072,7 @@ function initAudio(scene) {
     if (!ctx) return;
     scene.audio.ctx = ctx;
     const master = ctx.createGain();
-    master.gain.value = 0.5;
+    master.gain.value = 0.68;
     master.connect(ctx.destination);
     scene.audio.gain = master;
     scene.audio.ready = true;
@@ -2151,18 +2151,22 @@ function sfx(scene, kind) {
   } else if (kind === 'beep') {
     tone(scene, 440, 0.12, 'square', 0.12);
   } else if (kind === 'charge') {
-    tone(scene, 300, 0.07, 'triangle', 0.07, 520);
+    tone(scene, 300, 0.09, 'triangle', 0.15, 520);
   } else if (kind === 'throw') {
-    noise(scene, 0.16, 0.16, 900, 3);
+    noise(scene, 0.22, 0.38, 2600, 1);
+    tone(scene, 420, 0.16, 'triangle', 0.1, 160);
   } else if (kind === 'burn') {
-    tone(scene, 260, 0.3, 'sawtooth', 0.1, 70);
+    tone(scene, 260, 0.36, 'sawtooth', 0.26, 70);
+    noise(scene, 0.3, 0.22, 700, 2);
   } else if (kind === 'thud') {
-    tone(scene, 120, 0.14, 'sine', 0.16, 62);
-    noise(scene, 0.1, 0.1, 500);
+    tone(scene, 120, 0.2, 'sine', 0.3, 62);
+    noise(scene, 0.14, 0.22, 620);
   } else if (kind === 'clang') {
-    tone(scene, 1180, 0.32, 'square', 0.1, 900);
-    tone(scene, 1760, 0.24, 'square', 0.06);
-    noise(scene, 0.08, 0.08, 5200, 6);
+    // Embocinada is a 6-point reward — it has to ring out over the throw whoosh.
+    tone(scene, 1180, 0.42, 'square', 0.26, 900);
+    tone(scene, 1760, 0.34, 'square', 0.16);
+    tone(scene, 590, 0.3, 'triangle', 0.2, 440);
+    noise(scene, 0.1, 0.2, 5200, 6);
   } else if (kind === 'boom') {
     noise(scene, 0.42, 0.42, 1300, 1);
     tone(scene, 130, 0.34, 'sine', 0.3, 40);
