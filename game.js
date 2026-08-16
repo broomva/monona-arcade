@@ -79,10 +79,10 @@ const RECOVER_MS = 250;
 const COL = {
   night: 0x0a0c07,
   backdrop: 0x05060a,
-  clay: 0x8a4526,
-  clayDark: 0x5f2d17,
-  clayLight: 0xa8593a,
-  clayWet: 0x4a2110,
+  clay: 0x8a5a3e,
+  clayDark: 0x5c4130,
+  clayLight: 0xa8886a,
+  clayWet: 0x40312a,
   frame: 0x3f2410,
   frameLip: 0x6a4020,
   metal: 0xd7d7c4,
@@ -108,6 +108,8 @@ const COL = {
   sand: 0x8a7550,
   sandDark: 0x6a5a3c,
   sandLit: 0xa89066,
+  mecha: 0xd6a4a5,
+  scorch: 0x24242e,
   crate: 0xb8342c,
   crateDark: 0x7d221d,
 };
@@ -835,6 +837,30 @@ function buildCajon(scene) {
     g.fillEllipse(x, y, 26 + pseudo(i * 2.7) * 44, (12 + pseudo(i * 4.1) * 18) * FORESHORTEN);
   }
 
+  // Spent powder. The burn residue sits blue-black in the depressions around the
+  // bocín and reads strongly against the warm clay — a distinctive signature.
+  for (let i = 0; i < 22; i++) {
+    const a2 = pseudo(i * 4.9) * Math.PI * 2;
+    const r2 = 30 + Math.sqrt(pseudo(i * 8.3)) * 78;
+    const x2 = BOCIN.x + Math.cos(a2) * r2;
+    const y2 = BOCIN.y + Math.sin(a2) * r2 * FORESHORTEN;
+    if (y2 < CLAY.topY + 5 || y2 > CLAY.botY - 5) continue;
+    if (Math.abs(x2 - CLAY.cx) > clayHalfW(y2) - 8) continue;
+    g.fillStyle(COL.scorch, 0.3 + pseudo(i * 2.2) * 0.28);
+    g.fillEllipse(x2, y2, 10 + pseudo(i * 6.4) * 24, (6 + pseudo(i * 3.8) * 12) * FORESHORTEN);
+  }
+  // Torn scraps of spent mecha paper left on the face.
+  for (let i = 0; i < 9; i++) {
+    const a3 = pseudo(i * 7.3) * Math.PI * 2;
+    const r3 = 34 + pseudo(i * 5.1) * 64;
+    const x3 = BOCIN.x + Math.cos(a3) * r3;
+    const y3 = BOCIN.y + Math.sin(a3) * r3 * FORESHORTEN;
+    if (y3 < CLAY.topY + 6 || y3 > CLAY.botY - 6) continue;
+    if (Math.abs(x3 - CLAY.cx) > clayHalfW(y3) - 10) continue;
+    g.fillStyle(COL.mecha, 0.5);
+    g.fillEllipse(x3, y3, 6, 4);
+  }
+
   // Old bites left by earlier tejos, deepest near the bocín where most land.
   for (let i = 0; i < 26; i++) {
     const a = pseudo(i * 3.3) * Math.PI * 2;
@@ -928,7 +954,7 @@ function buildLane(scene) {
   scene.chalk.lineStyle(3, COL.white, 0.16);
   scene.chalk.lineBetween(78, NY, 722, NY);
   scene.add
-    .text(400, NY + 13, '17,5 m  ENTRE BOCINES', {
+    .text(400, NY + 13, '18,5 m  ENTRE BOCINES  ·  CANCHA 19,5 m', {
       fontFamily: 'monospace',
       fontSize: '10px',
       color: CSS.dim,
@@ -1493,10 +1519,10 @@ function makeMecha(scene, slot) {
   // on the tilted clay, with a shadow so it sits ON the surface rather than over it.
   const halo = scene.add.ellipse(0, 1, 40, 40 * FORESHORTEN, COL.red, 0.14);
   const shadow = scene.add.ellipse(2, 5, 28, 11, 0x000000, 0.45);
-  const paper = scene.add.triangle(0, 0, 0, 11, 15, -9, -15, -9, 0xfff4dc);
-  paper.setStrokeStyle(2, 0x8a6a3a);
+  const paper = scene.add.triangle(0, 0, 0, 11, 15, -9, -15, -9, COL.mecha);
+  paper.setStrokeStyle(2, 0x9c5a5c);
   paper.setScale(1, FORESHORTEN);
-  const fold = scene.add.line(0, 0, 0, 9, 0, -8, 0xc9b48a).setLineWidth(1).setAlpha(0.75);
+  const fold = scene.add.line(0, 0, 0, 9, 0, -8, 0xf2ddd2).setLineWidth(1.4).setAlpha(0.9);
   fold.setScale(1, FORESHORTEN);
   const fuse = scene.add.circle(0, -8 * FORESHORTEN, 3.2, COL.red);
   c.add([halo, shadow, paper, fold, fuse]);
