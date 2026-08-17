@@ -1021,6 +1021,29 @@ function buildLane(scene) {
     ], true);
   }
 
+  // Depth cues. The lane cannot be drawn at true scale — a geometrically correct
+  // 18.5 m would shrink the cajón about fourfold and leave an unplayable target at
+  // the size this actually renders in a gallery. So the depth is compressed, and
+  // these transverse marks do the work instead: their spacing tightens as they
+  // recede, which reads as distance far more strongly than bare floor.
+  for (const [ly, alpha] of [[446, 0.1], [417, 0.085], [388, 0.07], [370, 0.055]]) {
+    const half = 150 + (ly - FY) * 1.354;
+    g.lineStyle(2, COL.white, alpha);
+    g.lineBetween(400 - half, ly, 400 + half, ly);
+  }
+  // Air thickens with distance: the far end of the lane sits in more haze.
+  for (let i = 0; i < 5; i++) {
+    const y0 = FY + i * 9;
+    const y1 = y0 + 11;
+    const h0 = 150 + (y0 - FY) * 1.354;
+    const h1 = 150 + (y1 - FY) * 1.354;
+    g.fillStyle(0x000000, 0.06);
+    g.fillPoints([
+      { x: 400 - h0, y: y0 }, { x: 400 + h0, y: y0 },
+      { x: 400 + h1, y: y1 }, { x: 400 - h1, y: y1 },
+    ], true);
+  }
+
   // Throwing line, and the real distance between bocines.
   scene.chalk = scene.add.graphics();
   scene.chalk.setDepth(2);
@@ -2702,7 +2725,7 @@ function tone(scene, freq, dur, type, vol, slideTo) {
   osc.stop(ctx.currentTime + dur + 0.02);
 }
 
-function noise(scene, dur, vol, freq, q) {
+function noise(scene, dur, vol, freq, q, type) {
   const ctx = actx(scene);
   if (!ctx) return;
   const len = Math.floor(ctx.sampleRate * dur);
@@ -2714,7 +2737,7 @@ function noise(scene, dur, vol, freq, q) {
   const src = ctx.createBufferSource();
   src.buffer = buf;
   const filter = ctx.createBiquadFilter();
-  filter.type = 'lowpass';
+  filter.type = type || 'lowpass';
   filter.frequency.setValueAtTime(freq || 1800, ctx.currentTime);
   filter.Q.value = q || 1;
   const g = ctx.createGain();
@@ -2790,15 +2813,78 @@ function cheer(scene) {
   src.start();
 }
 
-// A skeletal cumbia pulse: walking bass under an offbeat scraper. Enough to make
-// the cabinet feel like a tejo bar without eating the byte budget.
-const BASS_LINE = [55, 0, 82.4, 0, 55, 0, 73.4, 0, 49, 0, 73.4, 0, 55, 0, 82.4, 98];
+// --- Carranga -------------------------------------------------------------
+// Tejo is Boyacá's game and carranga is Boyacá's music: tiple and requinto over
+// a guacharaca scrape, fast and in 2/4. The tiple is synthesised with
+// Karplus-Strong — a noise burst pushed through a short averaging delay line —
+// which costs a handful of lines and actually sounds plucked, where an
+// oscillator never will.
+//
+// The progression is a generic I-IV-V-I voiced for this game. No existing
+// carranga tune is quoted; genre rhythm and chord movement are not anyone's
+// property, melodies are.
+
+const CARR_CHORDS = [
+  [392, 493.9, 587.3],
+  [392, 523.3, 659.3],
+  [440, 587.3, 740],
+  [392, 493.9, 587.3],
+];
+const CARR_BASS = [98, 130.8, 146.8, 98];
+const CARR_FIFTH = [146.8, 196, 220, 146.8];
+// A short requinto answer over the turnaround, so four bars do not wear thin.
+const CARR_MEL = { 26: 880, 27: 784, 29: 740, 30: 659.3, 31: 587.3 };
+
+// Karplus-Strong. Buffers are cached per pitch — there are only a dozen.
+function pluckBuffer(scene, freq) {
+  const ctx = actx(scene);
+  if (!ctx) return null;
+  const a = scene.audio;
+  a.plucks = a.plucks || {};
+  const key = Math.round(freq);
+  if (a.plucks[key]) return a.plucks[key];
+  const sr = ctx.sampleRate;
+  const n = Math.max(2, Math.floor(sr / freq));
+  const len = Math.floor(sr * 0.7);
+  const buf = ctx.createBuffer(1, len, sr);
+  const d = buf.getChannelData(0);
+  const ring = new Float32Array(n);
+  for (let i = 0; i < n; i++) ring[i] = Math.random() * 2 - 1;
+  let idx = 0;
+  for (let i = 0; i < len; i++) {
+    const cur = ring[idx];
+    const nxt = ring[(idx + 1) % n];
+    ring[idx] = (cur + nxt) * 0.5 * 0.9955;
+    d[i] = cur * (1 - i / len);
+    idx = (idx + 1) % n;
+  }
+  a.plucks[key] = buf;
+  return buf;
+}
+
+function pluck(scene, freq, vol, delay) {
+  const ctx = actx(scene);
+  const buf = pluckBuffer(scene, freq);
+  if (!ctx || !buf) return;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  const g = ctx.createGain();
+  g.gain.value = vol;
+  src.connect(g);
+  g.connect(scene.audio.gain);
+  src.start(ctx.currentTime + (delay || 0));
+}
+
+// Guacharaca: a bright scrape rather than a thud, so bandpass not lowpass.
+function rasp(scene, dur, vol) {
+  noise(scene, dur, vol, 4200, 2.5, 'bandpass');
+}
 
 function startMusic(scene) {
   if (!scene.audio || !scene.audio.ready || scene.audio.music) return;
   scene.audio.step = 0;
   scene.audio.music = scene.time.addEvent({
-    delay: 132,
+    delay: 128,
     loop: true,
     callback: () => musicStep(scene),
   });
@@ -2814,12 +2900,25 @@ function stopMusic(scene) {
 function musicStep(scene) {
   const a = scene.audio;
   if (!a) return;
-  const s = a.step % 16;
+  const s = a.step % 32;
   a.step++;
-  const note = BASS_LINE[s];
-  if (note) tone(scene, note, 0.2, 'triangle', 0.09);
-  if (s % 2 === 1) noise(scene, 0.05, 0.045, 7000, 4);
-  if (s === 4 || s === 12) noise(scene, 0.11, 0.09, 2400, 2);
+  const bar = Math.floor(s / 8);
+  const chord = CARR_CHORDS[bar];
+
+  // Guacharaca on every sixteenth, accented on the offbeat.
+  const off = s % 4 === 2;
+  rasp(scene, off ? 0.075 : 0.034, off ? 0.19 : 0.085);
+
+  // Tiple chop on the offbeats — the chucu-chucu that drives carranga. Strummed,
+  // so the strings are struck a few milliseconds apart rather than together.
+  if (off) {
+    for (let i = 0; i < chord.length; i++) pluck(scene, chord[i], 0.085, i * 0.013);
+  }
+
+  if (s % 8 === 0) tone(scene, CARR_BASS[bar], 0.24, 'triangle', 0.12);
+  else if (s % 8 === 4) tone(scene, CARR_FIFTH[bar], 0.2, 'triangle', 0.095);
+
+  if (CARR_MEL[s]) pluck(scene, CARR_MEL[s], 0.08);
 }
 
 // --- Storage --------------------------------------------------------------
